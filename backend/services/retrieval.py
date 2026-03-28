@@ -48,8 +48,8 @@ def rerank_chunks(query: str, chunks: list[dict], top_n: int = 4) -> list[dict]:
     """Alibaba reranker — reorders chunks by relevance to query."""
     if not chunks:
         return []
-    from dashscope.rerank import Rerank
-    resp = Rerank.call(
+    from dashscope import TextReRank
+    resp = TextReRank.call(
         model=settings.reranker_model,
         query=query,
         documents=[c["content"] for c in chunks],
