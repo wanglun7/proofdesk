@@ -1,4 +1,5 @@
-from pydantic_settings import BaseSettings
+from pydantic import AliasChoices, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -13,11 +14,13 @@ class Settings(BaseSettings):
     # Auth
     admin_username: str = "admin"
     admin_password: str = "changeme"
-    jwt_secret: str = "change-this-secret-in-production"
+    jwt_secret: str = Field(
+        default="change-this-secret-in-production",
+        validation_alias=AliasChoices("JWT_SECRET", "SECRET_KEY"),
+    )
     jwt_expire_hours: int = 24
 
-    class Config:
-        env_file = ".env"
+    model_config = SettingsConfigDict(env_file=".env")
 
 
 settings = Settings()

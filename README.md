@@ -105,7 +105,7 @@ RERANKER_MODEL=gte-rerank
 EMBED_DIM=1024
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=your-password
-SECRET_KEY=your-jwt-secret
+JWT_SECRET=your-jwt-secret
 ```
 
 Initialize database:
@@ -151,7 +151,7 @@ App runs at `http://localhost:5173`, API at `http://localhost:8000`.
 | `EMBED_DIM` | Embedding dimension (default: `1024`) |
 | `ADMIN_USERNAME` | Login username |
 | `ADMIN_PASSWORD` | Login password |
-| `SECRET_KEY` | JWT signing secret |
+| `JWT_SECRET` | JWT signing secret |
 
 ---
 

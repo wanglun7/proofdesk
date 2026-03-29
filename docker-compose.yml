@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -30,7 +28,7 @@ services:
       EMBED_DIM: ${EMBED_DIM:-1024}
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      SECRET_KEY: ${SECRET_KEY}
+      JWT_SECRET: ${JWT_SECRET}
     volumes:
       - questionnaire_files:/app/questionnaire_files
 
@@ -42,7 +40,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "8080:80"
+      - "127.0.0.1:8080:80"
 
 volumes:
   pgdata:
