@@ -7,11 +7,15 @@ Run: cd backend && pytest tests/test_questionnaire_parser.py -v -s
 import pytest
 from pathlib import Path
 
+from config import settings
 from services.questionnaire_parser import parse_questionnaire_file_llm
 
 FIXTURES = Path(__file__).parent.parent.parent / "test_kb" / "questionnaire_parser_tests"
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.live_eval]
+
+if not settings.openai_api_key:
+    pytest.skip("questionnaire parser tests require OPENAI_API_KEY", allow_module_level=True)
 
 
 # ---------------------------------------------------------------------------
