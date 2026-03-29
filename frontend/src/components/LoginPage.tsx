@@ -14,6 +14,10 @@ export default function LoginPage({ onLogin }: { onLogin: () => void }) {
     setLoading(true)
     try {
       const r = await login(username, password)
+      if (r.data.is_superadmin) {
+        setError('Admin account is bootstrap-only. Sign in with a workspace owner/member account.')
+        return
+      }
       localStorage.setItem('token', r.data.access_token)
       onLogin()
     } catch {

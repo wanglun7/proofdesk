@@ -50,7 +50,18 @@ export default function App() {
 
   useEffect(() => {
     if (!authed) return
-    listProjects().then((r) => setProjects(r.data)).catch(() => {})
+    const loadProjects = async () => {
+      try {
+        const r = await listProjects()
+        setProjects(r.data)
+      } catch (err: any) {
+        if (err?.response?.status === 403) {
+          localStorage.removeItem('token')
+          setAuthed(false)
+        }
+      }
+    }
+    loadProjects()
   }, [authed])
 
   useEffect(() => {
@@ -64,12 +75,17 @@ export default function App() {
   const handleCreate = async () => {
     const name = newName.trim()
     if (!name) return
-    const r = await createProject(name)
-    const p = r.data
-    setProjects((prev) => [p, ...prev])
-    setActiveProject(p)
-    setNewName('')
-    setCreating(false)
+    try {
+      const r = await createProject(name)
+      const p = r.data
+      setProjects((prev) => [p, ...prev])
+      setActiveProject(p)
+      setNewName('')
+      setCreating(false)
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      await showAlert('Create Project Failed', typeof detail === 'string' ? detail : 'Unable to create project.')
+    }
   }
 
   const handleDeleteProject = async (p: Project, e: React.MouseEvent) => {

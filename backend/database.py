@@ -16,8 +16,10 @@ async def init_db():
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
         for stmt in [
+            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS workspace_id UUID",
             "ALTER TABLE questions ADD COLUMN IF NOT EXISTS section TEXT",
             "ALTER TABLE questions ADD COLUMN IF NOT EXISTS answer_cell VARCHAR(32)",
+            "ALTER TABLE answer_library ADD COLUMN IF NOT EXISTS workspace_id UUID",
         ]:
             await conn.execute(text(stmt))
 

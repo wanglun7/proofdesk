@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
 
+from api.deps import require_workspace_member
+from api.scoping import get_questionnaire_for_workspace
+from auth_utils import AuthContext
 from database import get_db
 from models import AnswerLibraryEntry
 from services.retrieval import _embed_query
@@ -17,9 +20,17 @@ class LibraryEntryIn(BaseModel):
 
 
 @router.post("/entries")
-async def save_entry(body: LibraryEntryIn, db: AsyncSession = Depends(get_db)):
+async def save_entry(
+    body: LibraryEntryIn,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    if body.source_questionnaire_id:
+        await get_questionnaire_for_workspace(db, body.source_questionnaire_id, auth.workspace_id)
+
     embedding = _embed_query(body.question_text)
     entry = AnswerLibraryEntry(
+        workspace_id=auth.workspace_id,
         question_text=body.question_text,
         question_embedding=embedding,
         answer_text=body.answer_text,
@@ -32,9 +43,14 @@ async def save_entry(body: LibraryEntryIn, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/entries")
-async def list_entries(db: AsyncSession = Depends(get_db)):
+async def list_entries(
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
     result = await db.execute(
-        select(AnswerLibraryEntry).order_by(AnswerLibraryEntry.created_at.desc())
+        select(AnswerLibraryEntry)
+        .where(AnswerLibraryEntry.workspace_id == auth.workspace_id)
+        .order_by(AnswerLibraryEntry.created_at.desc())
     )
     entries = result.scalars().all()
     return [
@@ -49,8 +65,17 @@ async def list_entries(db: AsyncSession = Depends(get_db)):
 
 
 @router.delete("/entries/{eid}")
-async def delete_entry(eid: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(AnswerLibraryEntry).where(AnswerLibraryEntry.id == eid))
+async def delete_entry(
+    eid: str,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    result = await db.execute(
+        select(AnswerLibraryEntry).where(
+            AnswerLibraryEntry.id == eid,
+            AnswerLibraryEntry.workspace_id == auth.workspace_id,
+        )
+    )
     entry = result.scalar_one_or_none()
     if not entry:
         raise HTTPException(404, "Entry not found")

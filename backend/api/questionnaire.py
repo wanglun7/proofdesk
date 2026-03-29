@@ -1,16 +1,25 @@
 import os
 import json
 import tempfile
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
 
+from api.deps import require_workspace_member
+from api.scoping import (
+    get_answer_for_workspace,
+    get_project_for_workspace,
+    get_question_for_workspace,
+    get_questionnaire_for_workspace,
+)
+from auth_utils import AuthContext
 from database import get_db
-from models import Questionnaire, Question, Answer
+from models import Answer, AnswerLibraryEntry, Project, Question, Questionnaire
 from services.questionnaire_parser import parse_questionnaire_file_llm
 from services.retrieval import retrieve_and_rerank, _embed_query
 from services.generation import generate_answer, decompose_question
@@ -20,7 +29,12 @@ router = APIRouter()
 QUESTIONNAIRE_FILES_DIR = Path(__file__).parent.parent / "questionnaire_files"
 
 
-async def _check_library(question: str, db: AsyncSession, threshold: float = 0.88) -> dict | None:
+async def _check_library(
+    question: str,
+    db: AsyncSession,
+    workspace_id: str | uuid.UUID,
+    threshold: float = 0.88,
+) -> dict | None:
     """Check answer library for a semantically similar question."""
     try:
         qvec = _embed_query(question)
@@ -29,10 +43,11 @@ async def _check_library(question: str, db: AsyncSession, threshold: float = 0.8
     sql = text("""
         SELECT id, answer_text, 1 - (question_embedding <=> CAST(:vec AS vector)) AS similarity
         FROM answer_library
+        WHERE workspace_id = CAST(:workspace_id AS uuid)
         ORDER BY question_embedding <=> CAST(:vec AS vector)
         LIMIT 1
     """)
-    row = (await db.execute(sql, {"vec": str(qvec)})).fetchone()
+    row = (await db.execute(sql, {"vec": str(qvec), "workspace_id": str(workspace_id)})).fetchone()
     if row and row.similarity >= threshold:
         return {"answer": row.answer_text, "confidence": 1.0, "citations": [], "from_library": True}
     return None
@@ -43,7 +58,12 @@ async def parse_questionnaire(
     file: UploadFile = File(...),
     project_id: str | None = Form(None),
     db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
 ):
+    if not project_id:
+        raise HTTPException(400, "project_id is required")
+    project = await get_project_for_workspace(db, project_id, auth.workspace_id)
+
     content = await file.read()
     suffix = Path(file.filename).suffix.lower()
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
@@ -54,7 +74,7 @@ async def parse_questionnaire(
     finally:
         os.unlink(tmp_path)
 
-    q = Questionnaire(filename=file.filename, project_id=project_id or None)
+    q = Questionnaire(filename=file.filename, project_id=project.id)
     db.add(q)
     await db.flush()
 
@@ -85,13 +105,18 @@ async def parse_questionnaire(
     return {
         "id": str(q.id),
         "filename": q.filename,
-        "project_id": str(q.project_id) if q.project_id else None,
+        "project_id": str(q.project_id),
         "questions": [{"id": str(x.id), "seq": x.seq, "text": x.question_text} for x in qs],
     }
 
 
 @router.get("/by-project/{pid}")
-async def list_questionnaires_by_project(pid: str, db: AsyncSession = Depends(get_db)):
+async def list_questionnaires_by_project(
+    pid: str,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    await get_project_for_workspace(db, pid, auth.workspace_id)
     result = await db.execute(
         select(Questionnaire)
         .where(Questionnaire.project_id == pid)
@@ -114,11 +139,17 @@ async def list_questionnaires_by_project(pid: str, db: AsyncSession = Depends(ge
 
 
 @router.delete("/{qid}")
-async def delete_questionnaire(qid: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Questionnaire).where(Questionnaire.id == qid))
-    q = result.scalar_one_or_none()
-    if not q:
-        raise HTTPException(404, "Questionnaire not found")
+async def delete_questionnaire(
+    qid: str,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    q = await get_questionnaire_for_workspace(db, qid, auth.workspace_id)
+    await db.execute(
+        update(AnswerLibraryEntry)
+        .where(AnswerLibraryEntry.source_questionnaire_id == q.id)
+        .values(source_questionnaire_id=None)
+    )
     await db.delete(q)
     await db.commit()
 
@@ -131,12 +162,13 @@ async def delete_questionnaire(qid: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{qid}/answer-all-stream")
-async def answer_all_stream(qid: str, db: AsyncSession = Depends(get_db)):
-    q_result = await db.execute(select(Questionnaire).where(Questionnaire.id == qid))
-    questionnaire = q_result.scalar_one_or_none()
-    if not questionnaire:
-        raise HTTPException(404, "Questionnaire not found")
-    project_id = str(questionnaire.project_id) if questionnaire.project_id else None
+async def answer_all_stream(
+    qid: str,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    questionnaire = await get_questionnaire_for_workspace(db, qid, auth.workspace_id)
+    project_id = str(questionnaire.project_id)
 
     result = await db.execute(
         select(Question).where(Question.questionnaire_id == qid).order_by(Question.seq)
@@ -152,7 +184,7 @@ async def answer_all_stream(qid: str, db: AsyncSession = Depends(get_db)):
 
             try:
                 # Check answer library first
-                lib_hit = await _check_library(q.question_text, db)
+                lib_hit = await _check_library(q.question_text, db, workspace_id=auth.workspace_id)
                 if lib_hit:
                     gen = lib_hit
                 else:
@@ -194,22 +226,19 @@ async def answer_all_stream(qid: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/questions/{question_id}/regenerate")
-async def regenerate_answer(question_id: str, db: AsyncSession = Depends(get_db)):
-    q_result = await db.execute(
-        select(Question).where(Question.id == question_id)
-    )
-    q = q_result.scalar_one_or_none()
-    if not q:
-        raise HTTPException(404, "Question not found")
-
-    qn_result = await db.execute(select(Questionnaire).where(Questionnaire.id == q.questionnaire_id))
-    questionnaire = qn_result.scalar_one_or_none()
-    project_id = str(questionnaire.project_id) if questionnaire and questionnaire.project_id else None
+async def regenerate_answer(
+    question_id: str,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    q = await get_question_for_workspace(db, question_id, auth.workspace_id)
+    questionnaire = await get_questionnaire_for_workspace(db, q.questionnaire_id, auth.workspace_id)
+    project_id = str(questionnaire.project_id)
 
     async def generate():
         yield f"data: {json.dumps({'type': 'answering', 'seq': q.seq})}\n\n"
         try:
-            lib_hit = await _check_library(q.question_text, db)
+            lib_hit = await _check_library(q.question_text, db, workspace_id=auth.workspace_id)
             if lib_hit:
                 gen = lib_hit
             else:
@@ -249,11 +278,18 @@ async def regenerate_answer(question_id: str, db: AsyncSession = Depends(get_db)
 
 
 @router.get("/{qid}/answers")
-async def get_answers(qid: str, db: AsyncSession = Depends(get_db)):
+async def get_answers(
+    qid: str,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    await get_questionnaire_for_workspace(db, qid, auth.workspace_id)
     result = await db.execute(
         select(Question, Answer)
         .join(Answer, Answer.question_id == Question.id)
-        .where(Question.questionnaire_id == qid)
+        .join(Questionnaire, Questionnaire.id == Question.questionnaire_id)
+        .join(Project, Project.id == Questionnaire.project_id)
+        .where(Question.questionnaire_id == qid, Project.workspace_id == auth.workspace_id)
         .order_by(Question.seq)
     )
     rows = result.all()
@@ -276,11 +312,22 @@ async def get_answers(qid: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{qid}/approve-all")
-async def approve_all(qid: str, db: AsyncSession = Depends(get_db)):
+async def approve_all(
+    qid: str,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    await get_questionnaire_for_workspace(db, qid, auth.workspace_id)
     result = await db.execute(
         select(Answer)
         .join(Question, Question.id == Answer.question_id)
-        .where(Question.questionnaire_id == qid, Answer.status == "done")
+        .join(Questionnaire, Questionnaire.id == Question.questionnaire_id)
+        .join(Project, Project.id == Questionnaire.project_id)
+        .where(
+            Question.questionnaire_id == qid,
+            Answer.status == "done",
+            Project.workspace_id == auth.workspace_id,
+        )
     )
     answers = result.scalars().all()
     for ans in answers:
@@ -296,11 +343,13 @@ class AnswerPatch(BaseModel):
 
 
 @router.patch("/answers/{aid}")
-async def patch_answer(aid: str, body: AnswerPatch, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Answer).where(Answer.id == aid))
-    ans = result.scalar_one_or_none()
-    if not ans:
-        raise HTTPException(404, "Answer not found")
+async def patch_answer(
+    aid: str,
+    body: AnswerPatch,
+    db: AsyncSession = Depends(get_db),
+    auth: AuthContext = Depends(require_workspace_member),
+):
+    ans = await get_answer_for_workspace(db, aid, auth.workspace_id)
     if body.human_edit is not None:
         ans.human_edit = body.human_edit
         # editing alone does NOT auto-approve — status unchanged

@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { Upload, Zap, Check, Download, RotateCcw, Flag, BookOpen, Paperclip, Library } from 'lucide-react'
-import { parseQuestionnaire, getAnswers, patchAnswer, approveAll, exportUrl, exportFilledUrl, answerAllStreamUrl, regenerateStreamUrl, saveToLibrary } from '../api'
+import { parseQuestionnaire, getAnswers, patchAnswer, approveAll, exportFilledUrl, answerAllStreamUrl, regenerateStreamUrl, saveToLibrary } from '../api'
 
 interface Citation {
   source: string
@@ -430,31 +430,21 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
 
             {items.length > 0 && (
               allApproved ? (
-                <div className="flex gap-2 ml-auto">
-                  <a
-                    href={exportUrl(activeQid)}
-                    download
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-md hover:bg-indigo-700 transition-colors"
-                  >
-                    <Download size={14} />
-                    Export Excel
-                  </a>
-                  <a
-                    href={exportFilledUrl(activeQid)}
-                    download
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-cyan-600 text-white rounded-md hover:bg-cyan-700 transition-colors"
-                  >
-                    <Download size={14} />
-                    Fill Template
-                  </a>
-                </div>
+                <a
+                  href={exportFilledUrl(activeQid)}
+                  download
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-cyan-600 text-white rounded-md hover:bg-cyan-700 transition-colors ml-auto"
+                >
+                  <Download size={14} />
+                  Export Questionnaire
+                </a>
               ) : (
                 <span
                   title={`${approvedCount}/${items.length} approved — approve all to export`}
                   className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-slate-100 text-slate-400 rounded-md cursor-not-allowed ml-auto"
                 >
                   <Download size={14} />
-                  Export ({approvedCount}/{items.length})
+                  Export Questionnaire ({approvedCount}/{items.length})
                 </span>
               )
             )}
