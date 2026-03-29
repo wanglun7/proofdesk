@@ -15,6 +15,11 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        for stmt in [
+            "ALTER TABLE questions ADD COLUMN IF NOT EXISTS section TEXT",
+            "ALTER TABLE questions ADD COLUMN IF NOT EXISTS answer_cell VARCHAR(32)",
+        ]:
+            await conn.execute(text(stmt))
 
 
 async def get_db():

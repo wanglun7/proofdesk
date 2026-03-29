@@ -10,9 +10,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@fontsource/inter": "^5.2.8",
+    "autoprefixer": "^10.4.27",
     "axios": "^1.14.0",
+    "lucide-react": "^1.7.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "tailwindcss": "^3.4.19"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

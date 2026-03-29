@@ -10,6 +10,11 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-v3"
     reranker_model: str = "gte-rerank"
     embed_dim: int = 1024
+    # Auth
+    admin_username: str = "admin"
+    admin_password: str = "changeme"
+    jwt_secret: str = "change-this-secret-in-production"
+    jwt_expire_hours: int = 24
 
     class Config:
         env_file = ".env"
