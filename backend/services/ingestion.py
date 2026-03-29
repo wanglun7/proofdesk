@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import Document, Chunk
 from config import settings
+from services.dashscope_client import configure_dashscope
 
 
 # --- Text extraction ---
@@ -110,7 +111,7 @@ def sentence_window_chunks(text: str, window_size: int = 3) -> list[tuple[str, s
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
     """Embed a single batch (≤10 texts)."""
-    dashscope.api_key = settings.dashscope_api_key
+    configure_dashscope()
     resp = TextEmbedding.call(
         model=settings.embedding_model,
         input=texts,

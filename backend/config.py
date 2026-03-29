@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o"
     dashscope_api_key: str = ""
+    dashscope_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
     embedding_model: str = "text-embedding-v3"
     reranker_model: str = "gte-rerank"
     embed_dim: int = 1024

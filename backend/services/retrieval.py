@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from config import settings
+from services.dashscope_client import configure_dashscope
 
 
 def cosine_top_k_mock(items: list[tuple], top_k: int) -> list[tuple]:
@@ -12,7 +13,7 @@ def cosine_top_k_mock(items: list[tuple], top_k: int) -> list[tuple]:
 
 
 def _embed_query(query: str) -> list[float]:
-    dashscope.api_key = settings.dashscope_api_key
+    configure_dashscope()
     resp = TextEmbedding.call(
         model=settings.embedding_model,
         input=[query],
@@ -94,6 +95,7 @@ def rerank_chunks(query: str, chunks: list[dict], top_n: int = 5) -> list[dict]:
     if not chunks:
         return []
     from dashscope import TextReRank
+    configure_dashscope()
     resp = TextReRank.call(
         model=settings.reranker_model,
         query=query,
