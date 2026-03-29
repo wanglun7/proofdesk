@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react'
 import { Upload, Zap, Check, Download, RotateCcw, Flag, BookOpen, Paperclip, Library } from 'lucide-react'
 import { parseQuestionnaire, getAnswers, patchAnswer, approveAll, exportFilledUrl, answerAllStreamUrl, regenerateStreamUrl, saveToLibrary } from '../api'
+import { markAnsweringItemsAsErrored, reduceAnswerAllEvent } from '../lib/workbenchStream'
 
 interface Citation {
   source: string
@@ -99,6 +100,12 @@ function StatusBadge({ item }: { item: QItem }) {
     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red-100 text-red-600 font-medium whitespace-nowrap">
       <Flag size={10} />
       Flagged
+    </span>
+  )
+  if (item.status === 'error') return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-red-100 text-red-600 font-medium whitespace-nowrap">
+      <Flag size={10} />
+      Error
     </span>
   )
   if (item.status === 'pending') return (
@@ -213,6 +220,7 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null)
   const [filter, setFilter] = useState<'all' | 'flagged' | 'review' | 'approved'>('all')
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
+  const [streamAlert, setStreamAlert] = useState<string | null>(null)
   const ref = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -260,43 +268,37 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
     }
     setRunning(true)
     setProgress({ current: 0, total: 0 })
+    setStreamAlert(null)
 
     const es = new EventSource(answerAllStreamUrl(activeQid))
 
     es.onmessage = (event) => {
       const data = JSON.parse(event.data)
-      if (data.type === 'answering') {
-        setProgress({ current: data.seq + 1, total: data.total })
-        setItems((prev) =>
-          prev.map((x) => (x.seq === data.seq ? { ...x, status: 'answering' } : x))
-        )
-      } else if (data.type === 'answer') {
-        setItems((prev) =>
-          prev.map((x) =>
-            x.answer_id === data.answer_id
-              ? {
-                  ...x,
-                  draft: data.draft,
-                  citations: data.citations,
-                  confidence: data.confidence,
-                  needs_review: data.needs_review,
-                  status: data.status,
-                  from_library: data.from_library ?? false,
-                }
-              : x
-          )
-        )
-      } else if (data.type === 'done') {
+      let nextProgress: { current: number; total: number } | null | undefined
+      let finished = false
+      let alertMessage: string | null = null
+
+      setItems((prev) => {
+        const result = reduceAnswerAllEvent(prev, data)
+        nextProgress = result.progress
+        finished = result.finished
+        alertMessage = result.alertMessage
+        return result.items
+      })
+
+      if (nextProgress !== undefined) setProgress(nextProgress)
+      if (alertMessage) setStreamAlert(alertMessage)
+      if (finished) {
         es.close()
         setRunning(false)
         setProgress(null)
-      } else if (data.type === 'error') {
-        console.error('Answer error for seq', data.seq, data.error)
       }
     }
 
     es.onerror = () => {
       es.close()
+      setItems((prev) => markAnsweringItemsAsErrored(prev, 'Connection lost during auto-answer.'))
+      setStreamAlert('Auto-answer connection was interrupted. Retry the failed questions with Regen.')
       setRunning(false)
       setProgress(null)
     }
@@ -344,6 +346,7 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
   }
 
   const handleRegenerate = (item: QItem) => {
+    setStreamAlert(null)
     setItems((prev) => prev.map((x) => x.answer_id === item.answer_id ? { ...x, status: 'answering' } : x))
     const es = new EventSource(regenerateStreamUrl(item.question_id))
     es.onmessage = (event) => {
@@ -354,11 +357,27 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
             ? { ...x, draft: data.draft, human_edit: null, citations: data.citations, confidence: data.confidence, needs_review: data.needs_review, status: data.status, from_library: data.from_library ?? false }
             : x
         ))
-      } else if (data.type === 'done' || data.type === 'error') {
+      } else if (data.type === 'error') {
+        setItems((prev) => prev.map((x) =>
+          x.answer_id === item.answer_id
+            ? { ...x, status: 'error', flag_reason: data.error }
+            : x
+        ))
+        setStreamAlert(`Question ${item.seq + 1} failed: ${data.error}`)
+        es.close()
+      } else if (data.type === 'done') {
         es.close()
       }
     }
-    es.onerror = () => es.close()
+    es.onerror = () => {
+      es.close()
+      setItems((prev) => prev.map((x) =>
+        x.answer_id === item.answer_id
+          ? { ...x, status: 'error', flag_reason: 'Connection lost during regenerate.' }
+          : x
+      ))
+      setStreamAlert(`Question ${item.seq + 1} failed: connection lost during regenerate.`)
+    }
   }
 
   const handleSaveToLibrary = async (item: QItem) => {
@@ -452,6 +471,12 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
         )}
       </div>
 
+      {streamAlert && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+          {streamAlert}
+        </div>
+      )}
+
       {/* Filter tabs */}
       {items.length > 0 && (
         <div className="flex border-b border-slate-200 mb-5 gap-0">
@@ -497,15 +522,19 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
         {visible.map((item) => {
           const displayAnswer = item.human_edit || item.draft || ''
           const isAnswering = item.status === 'answering'
+          const isErrored = item.status === 'error'
           const isFlagged = item.status === 'flagged'
           const isApproved = item.status === 'approved'
           const isDone = item.status === 'done'
           const canAct = isDone || isFlagged
+          const canRegenerate = isDone || isFlagged || isErrored
           const isLocked = isApproved || isAnswering
 
           // Left status bar color
           const barColor = isFlagged
             ? 'bg-red-400'
+            : isErrored
+              ? 'bg-red-400'
             : isApproved
               ? 'bg-emerald-400'
               : item.needs_review && isDone
@@ -557,7 +586,7 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
                         </button>
                       </>
                     )}
-                    {(isDone || isFlagged) && (
+                    {canRegenerate && (
                       <button
                         onClick={() => handleRegenerate(item)}
                         className="flex items-center gap-1 px-2 py-0.5 text-[11px] border border-slate-200 rounded text-slate-500 hover:text-slate-700 hover:bg-slate-50 transition-colors"
@@ -591,14 +620,15 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
                   }`}
                   placeholder={
                     isAnswering ? 'Generating answer…'
+                      : isErrored ? 'Answer generation failed. Click "Regen" to retry.'
                       : item.status === 'pending' ? 'Click "Auto-Answer All" to generate…' : ''
                   }
                 />
 
                 {/* Flag reason */}
-                {isFlagged && item.flag_reason && (
+                {(isFlagged || isErrored) && item.flag_reason && (
                   <div className="mt-2 px-3 py-2 bg-red-50 border border-red-100 rounded-md text-xs text-red-600">
-                    <span className="font-semibold">Flag reason:</span> {item.flag_reason}
+                    <span className="font-semibold">{isErrored ? 'Error:' : 'Flag reason:'}</span> {item.flag_reason}
                   </div>
                 )}
 

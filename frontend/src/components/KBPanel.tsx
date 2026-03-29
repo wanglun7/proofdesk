@@ -1,20 +1,12 @@
 import { useEffect, useState, useRef } from 'react'
 import { Upload, FileText, Trash2 } from 'lucide-react'
 import { listDocs, deleteDoc, uploadDocStream } from '../api'
+import { getAggregateUploadProgress, type UploadFileProgress } from '../lib/uploadProgress'
 
 interface Doc {
   id: string
   filename: string
   uploaded_at: string
-}
-
-interface FileProgress {
-  filename: string
-  status: 'queued' | 'extracting' | 'chunking' | 'embedding' | 'done' | 'error'
-  current?: number
-  total?: number
-  chunks?: number
-  error?: string
 }
 
 interface Props {
@@ -23,7 +15,7 @@ interface Props {
   showConfirm: (title: string, message: string) => Promise<boolean>
 }
 
-function StatusTag({ f }: { f: FileProgress }) {
+function StatusTag({ f }: { f: UploadFileProgress }) {
   if (f.status === 'queued') return (
     <span className="text-[11px] text-slate-400 font-medium">Queued</span>
   )
@@ -68,7 +60,7 @@ function StatusTag({ f }: { f: FileProgress }) {
 
 export default function KBPanel({ activeProjectId, onDocCountChange, showConfirm }: Props) {
   const [docs, setDocs] = useState<Doc[]>([])
-  const [queue, setQueue] = useState<FileProgress[]>([])
+  const [queue, setQueue] = useState<UploadFileProgress[]>([])
   const [uploading, setUploading] = useState(false)
   const ref = useRef<HTMLInputElement>(null)
 
@@ -159,8 +151,7 @@ export default function KBPanel({ activeProjectId, onDocCountChange, showConfirm
     )
   }
 
-  const doneCount = queue.filter(f => f.status === 'done').length
-  const totalCount = queue.length
+  const { completedCount, totalCount, percent } = getAggregateUploadProgress(queue)
 
   return (
     <div>
@@ -190,16 +181,16 @@ export default function KBPanel({ activeProjectId, onDocCountChange, showConfirm
         <div className="mb-5 p-4 bg-slate-50 border border-slate-200 rounded-lg">
           <div className="flex justify-between items-center mb-2">
             <span className="text-xs font-semibold text-slate-600">
-              {uploading ? 'Uploading' : 'Done'} {doneCount}/{totalCount}
+              {uploading ? 'Uploading' : 'Processed'} {completedCount}/{totalCount}
             </span>
             <span className="text-[11px] text-slate-400">
-              {Math.round(doneCount / totalCount * 100)}%
+              {percent}%
             </span>
           </div>
           <div className="h-1 bg-slate-200 rounded-full mb-3 overflow-hidden">
             <div
               className="h-full bg-brand-600 rounded-full transition-all duration-300"
-              style={{ width: `${Math.round(doneCount / totalCount * 100)}%` }}
+              style={{ width: `${percent}%` }}
             />
           </div>
           <div className="space-y-1.5">

@@ -8,9 +8,9 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o"
     dashscope_api_key: str = ""
-    dashscope_base_url: str = "https://dashscope.aliyuncs.com/api/v1"
-    embedding_model: str = "text-embedding-v3"
-    reranker_model: str = "gte-rerank"
+    dashscope_base_url: str = "https://dashscope-intl.aliyuncs.com/api/v1"
+    embedding_model: str = "text-embedding-v4"
+    reranker_model: str = "qwen3-rerank"
     embed_dim: int = 1024
     # Auth
     admin_username: str = "admin"
