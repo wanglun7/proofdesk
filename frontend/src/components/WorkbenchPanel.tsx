@@ -226,9 +226,15 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
   useEffect(() => {
     setItems([])
     setFilter('all')
+    setStreamAlert(null)
+    setRunning(false)
+    setProgress(null)
   }, [activeProjectId])
 
   useEffect(() => {
+    setStreamAlert(null)
+    setRunning(false)
+    setProgress(null)
     if (activeQid) loadAnswers(activeQid)
     else setItems([])
   }, [activeQid])
@@ -246,6 +252,9 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
       return
     }
     setLoading(true)
+    setStreamAlert(null)
+    setProgress(null)
+    setRunning(false)
     try {
       const r = await parseQuestionnaire(file, activeProjectId)
       const qid: string = r.data.id
@@ -376,7 +385,7 @@ export default function WorkbenchPanel({ onQidChange, activeQid, activeProjectId
           ? { ...x, status: 'error', flag_reason: 'Connection lost during regenerate.' }
           : x
       ))
-      setStreamAlert(`Question ${item.seq + 1} failed: connection lost during regenerate.`)
+      setStreamAlert('AI answer failed. Please retry.')
     }
   }
 

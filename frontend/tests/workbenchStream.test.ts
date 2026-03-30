@@ -25,12 +25,12 @@ function makeItem(overrides: Partial<StreamQuestionItem> = {}): StreamQuestionIt
 test('error event marks the affected row as error and produces a user-visible message', () => {
   const result = reduceAnswerAllEvent(
     [makeItem({ status: 'answering' })],
-    { type: 'error', seq: 0, error: 'Rerank error: Access denied' },
+    { type: 'error', seq: 0, error: 'AI answer failed. Check your AI provider configuration and try again.' },
   )
 
   assert.equal(result.items[0].status, 'error')
-  assert.equal(result.items[0].flag_reason, 'Rerank error: Access denied')
-  assert.match(result.alertMessage ?? '', /Question 1/)
+  assert.equal(result.items[0].flag_reason, 'AI answer failed. Check your AI provider configuration and try again.')
+  assert.equal(result.alertMessage, 'AI answer failed. Check your AI provider configuration and try again.')
 })
 
 test('transport failure clears any answering rows into an error state', () => {

@@ -82,7 +82,7 @@ export function reduceAnswerAllEvent<T extends StreamQuestionItem>(
           : item
       )),
       finished: false,
-      alertMessage: `Question ${event.seq + 1} failed: ${event.error}`,
+      alertMessage: event.error,
     }
   }
 

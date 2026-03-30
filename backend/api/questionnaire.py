@@ -2,6 +2,7 @@ import os
 import json
 import tempfile
 import uuid
+import logging
 from pathlib import Path
 
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, Form
@@ -23,8 +24,10 @@ from models import Answer, AnswerLibraryEntry, Project, Question, Questionnaire
 from services.questionnaire_parser import parse_questionnaire_file_llm
 from services.retrieval import retrieve_and_rerank, _embed_query
 from services.generation import generate_answer, decompose_question
+from services.user_errors import to_public_answer_error
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 QUESTIONNAIRE_FILES_DIR = Path(__file__).parent.parent / "questionnaire_files"
 
@@ -201,7 +204,8 @@ async def answer_all_stream(
                                 all_chunks.append(c)
                     gen = await generate_answer(q.question_text, all_chunks)
             except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'seq': q.seq, 'error': str(e)})}\n\n"
+                logger.exception("answer_all_stream failed for question_id=%s seq=%s", q.id, q.seq)
+                yield f"data: {json.dumps({'type': 'error', 'seq': q.seq, 'error': to_public_answer_error(e)})}\n\n"
                 continue
 
             ans_result = await db.execute(select(Answer).where(Answer.question_id == q.id))
@@ -253,7 +257,8 @@ async def regenerate_answer(
                             all_chunks.append(c)
                 gen = await generate_answer(q.question_text, all_chunks)
         except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'seq': q.seq, 'error': str(e)})}\n\n"
+            logger.exception("regenerate_answer failed for question_id=%s seq=%s", q.id, q.seq)
+            yield f"data: {json.dumps({'type': 'error', 'seq': q.seq, 'error': to_public_answer_error(e)})}\n\n"
             return
 
         ans_result = await db.execute(select(Answer).where(Answer.question_id == q.id))
