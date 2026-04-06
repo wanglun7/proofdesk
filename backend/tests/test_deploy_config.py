@@ -29,3 +29,13 @@ def test_env_examples_use_jwt_secret_name():
     assert "SECRET_KEY=" not in root_example
     assert "JWT_SECRET=" in backend_example
     assert "SECRET_KEY=" not in backend_example
+
+
+def test_docker_compose_passes_wecom_callback_config_to_backend():
+    compose_text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "WECOM_KF_TOKEN: ${WECOM_KF_TOKEN}" in compose_text
+    assert "WECOM_KF_ENCODING_AES_KEY: ${WECOM_KF_ENCODING_AES_KEY}" in compose_text
+    assert "WECOM_KF_RECEIVE_ID: ${WECOM_KF_RECEIVE_ID:-}" in compose_text
+    assert "WECOM_KF_SECRET: ${WECOM_KF_SECRET:-}" in compose_text
+    assert "WECOM_CORP_ID: ${WECOM_CORP_ID:-}" in compose_text

@@ -30,6 +30,11 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
+      WECOM_KF_TOKEN: ${WECOM_KF_TOKEN}
+      WECOM_KF_ENCODING_AES_KEY: ${WECOM_KF_ENCODING_AES_KEY}
+      WECOM_KF_RECEIVE_ID: ${WECOM_KF_RECEIVE_ID:-}
+      WECOM_KF_SECRET: ${WECOM_KF_SECRET:-}
+      WECOM_CORP_ID: ${WECOM_CORP_ID:-}
     volumes:
       - questionnaire_files:/app/questionnaire_files
 
