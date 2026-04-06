@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import logging
 import os
 import struct
 from types import SimpleNamespace
@@ -163,6 +164,7 @@ async def test_wecom_process_sync_batch_syncs_text_and_replies_with_same_content
             reply_locks={},
             last_reply_sent_at={},
             active_tasks=set(),
+            recent_send_attempts={},
         ),
     )
     monkeypatch.setattr("api.wecom._now", lambda: 100.0)
@@ -269,6 +271,7 @@ async def test_wecom_process_sync_batch_replies_only_latest_user_text(monkeypatc
             reply_locks={},
             last_reply_sent_at={},
             active_tasks=set(),
+            recent_send_attempts={},
         ),
     )
     monkeypatch.setattr("api.wecom._now", lambda: 100.0)
@@ -315,6 +318,7 @@ async def test_wecom_process_sync_batch_skips_send_when_rate_limited(monkeypatch
             reply_locks={},
             last_reply_sent_at={"kfid_test": 100.0},
             active_tasks=set(),
+            recent_send_attempts={},
         ),
     )
     monkeypatch.setattr("api.wecom._now", lambda: 101.0)
@@ -324,3 +328,111 @@ async def test_wecom_process_sync_batch_skips_send_when_rate_limited(monkeypatch
     await _process_sync_batch(client=FakeWeComClient(), sync_token="sync-token-1", open_kfid="kfid_test")
 
     assert calls == [("sync", "sync-token-1", "kfid_test", "")]
+
+
+def test_wecom_message_debug_summary_includes_fail_event_fields():
+    from api.wecom import _message_debug_summary
+
+    summary = _message_debug_summary(
+        {
+            "msgid": "msg-fail-1",
+            "msgtype": "event",
+            "origin": 4,
+            "send_time": 1775475000,
+            "external_userid": "external-1",
+            "open_kfid": "kfid-1",
+            "event": {
+                "event_type": "msg_send_fail",
+                "fail_type": 6,
+                "origin_msgid": "outbound-1",
+            },
+        }
+    )
+
+    assert summary == {
+        "msgid": "msg-fail-1",
+        "msgtype": "event",
+        "origin": 4,
+        "send_time": 1775475000,
+        "external_userid": "external-1",
+        "open_kfid": "kfid-1",
+        "event_type": "msg_send_fail",
+        "fail_type": 6,
+        "origin_msgid": "outbound-1",
+    }
+
+
+async def test_wecom_process_sync_batch_logs_item_details_skip_reasons_and_fail_event(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="api.wecom")
+    calls: list[tuple[str, ...]] = []
+
+    class FakeWeComClient:
+        async def sync_messages(self, *, sync_token: str, open_kfid: str, cursor: str | None = None):
+            calls.append(("sync", sync_token, open_kfid, cursor or ""))
+            return {
+                "next_cursor": "cursor-2",
+                "has_more": 0,
+                "msg_list": [
+                    {
+                        "msgid": "dup-1",
+                        "msgtype": "text",
+                        "origin": 3,
+                        "send_time": 1,
+                        "external_userid": "external-user-1",
+                        "text": {"content": "dup"},
+                    },
+                    {
+                        "msgid": "fail-1",
+                        "msgtype": "event",
+                        "origin": 4,
+                        "send_time": 2,
+                        "external_userid": "external-user-1",
+                        "event": {"event_type": "msg_send_fail", "fail_type": 6, "origin_msgid": "outbound-1"},
+                    },
+                    {
+                        "msgid": "skip-1",
+                        "msgtype": "image",
+                        "origin": 3,
+                        "send_time": 3,
+                        "external_userid": "external-user-1",
+                    },
+                    {
+                        "msgid": "candidate-1",
+                        "msgtype": "text",
+                        "origin": 3,
+                        "send_time": 4,
+                        "external_userid": "external-user-1",
+                        "text": {"content": "candidate"},
+                    },
+                ],
+            }
+
+        async def send_text_message(self, *, touser: str, open_kfid: str, content: str):
+            calls.append(("send", touser, open_kfid, content))
+            return {"errcode": 0, "errmsg": "ok", "msgid": "outbound-1"}
+
+    monkeypatch.setattr(
+        "api.wecom.wecom_runtime",
+        SimpleNamespace(
+            cursors={},
+            processed_message_ids={"dup-1"},
+            reply_locks={},
+            last_reply_sent_at={},
+            active_tasks=set(),
+            recent_send_attempts={},
+        ),
+    )
+    monkeypatch.setattr("api.wecom._now", lambda: 100.0)
+
+    from api.wecom import _process_sync_batch
+
+    await _process_sync_batch(client=FakeWeComClient(), sync_token="sync-token-1", open_kfid="kfid_test")
+
+    log_text = caplog.text
+    assert "WeCom sync item:" in log_text
+    assert "msg_send_fail" in log_text
+    assert "fail_type': 6" in log_text
+    assert "WeCom sync item skipped duplicate" in log_text
+    assert "skip_reason=unsupported_msgtype:image" in log_text
+    assert "WeCom send request:" in log_text
+    assert "WeCom send response:" in log_text

@@ -23,6 +23,7 @@ class WeComRuntime:
         self.reply_locks: dict[str, asyncio.Lock] = {}
         self.last_reply_sent_at: dict[str, float] = {}
         self.active_tasks: set[asyncio.Task] = set()
+        self.recent_send_attempts: dict[str, dict] = {}
 
 
 wecom_runtime = WeComRuntime()
@@ -62,6 +63,52 @@ def _event_text(event: ElementTree.Element, tag: str) -> str | None:
     return stripped or None
 
 
+def _content_preview(content: str | None, limit: int = 80) -> str | None:
+    if content is None:
+        return None
+    cleaned = content.replace("\n", "\\n")
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[:limit]}..."
+
+
+def _message_debug_summary(message: dict) -> dict:
+    text = message.get("text") or {}
+    event = message.get("event") or {}
+    summary = {
+        "msgid": message.get("msgid"),
+        "msgtype": message.get("msgtype"),
+        "origin": message.get("origin"),
+        "send_time": message.get("send_time"),
+        "external_userid": message.get("external_userid"),
+        "servicer_userid": message.get("servicer_userid"),
+        "open_kfid": message.get("open_kfid"),
+        "has_text": bool(isinstance(text.get("content"), str) and text.get("content").strip()),
+        "text_preview": _content_preview(text.get("content")),
+        "event_type": event.get("event_type"),
+        "fail_type": event.get("fail_type"),
+        "origin_msgid": event.get("origin_msgid"),
+    }
+    return {key: value for key, value in summary.items() if value not in (None, "", False)}
+
+
+def _skip_reason(message: dict) -> str:
+    msgtype = message.get("msgtype")
+    if msgtype != "text":
+        return f"unsupported_msgtype:{msgtype}"
+    origin = message.get("origin")
+    if origin != _CUSTOMER_ORIGIN:
+        return f"non_customer_origin:{origin}"
+    if not message.get("external_userid"):
+        return "missing_external_userid"
+
+    text = message.get("text") or {}
+    content = text.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return "empty_text_content"
+    return "not_selected"
+
+
 def _should_echo_message(message: dict) -> bool:
     if message.get("msgtype") != "text":
         return False
@@ -79,6 +126,14 @@ def _remember_processed_message(msgid: str) -> None:
     wecom_runtime.processed_message_ids.add(msgid)
     if len(wecom_runtime.processed_message_ids) > 5000:
         wecom_runtime.processed_message_ids.clear()
+
+
+def _remember_send_attempt(send_msgid: str | None, details: dict) -> None:
+    if not send_msgid:
+        return
+    wecom_runtime.recent_send_attempts[send_msgid] = details
+    if len(wecom_runtime.recent_send_attempts) > 2000:
+        wecom_runtime.recent_send_attempts.clear()
 
 
 def _get_reply_lock(open_kfid: str) -> asyncio.Lock:
@@ -132,11 +187,37 @@ async def _process_sync_batch(*, client: WeComClient, sync_token: str, open_kfid
 
         for message in messages:
             msgid = str(message.get("msgid") or "")
+            logger.info("WeCom sync item: open_kfid=%s details=%s", open_kfid, _message_debug_summary(message))
+            event = message.get("event") or {}
+            if event.get("event_type") == "msg_send_fail":
+                related = wecom_runtime.recent_send_attempts.get(str(event.get("origin_msgid") or ""))
+                logger.warning(
+                    "WeCom send fail event: open_kfid=%s msgid=%s fail_type=%s origin_msgid=%s related_attempt=%s",
+                    open_kfid,
+                    msgid,
+                    event.get("fail_type"),
+                    event.get("origin_msgid"),
+                    related,
+                )
             if msgid and msgid in wecom_runtime.processed_message_ids:
+                logger.info("WeCom sync item skipped duplicate: open_kfid=%s msgid=%s", open_kfid, msgid)
                 continue
 
             if _should_echo_message(message):
                 latest_candidate = message
+                logger.info(
+                    "WeCom sync item selected candidate: open_kfid=%s msgid=%s content=%r",
+                    open_kfid,
+                    msgid,
+                    message["text"]["content"].strip(),
+                )
+            else:
+                logger.info(
+                    "WeCom sync item skipped: open_kfid=%s msgid=%s skip_reason=%s",
+                    open_kfid,
+                    msgid,
+                    _skip_reason(message),
+                )
 
             if msgid:
                 _remember_processed_message(msgid)
@@ -171,10 +252,29 @@ async def _process_sync_batch(*, client: WeComClient, sync_token: str, open_kfid
         msgid,
         content,
     )
-    await client.send_text_message(
+    logger.info(
+        "WeCom send request: open_kfid=%s reply_to_msgid=%s touser=%s content=%r",
+        open_kfid,
+        msgid,
+        latest_candidate["external_userid"],
+        content,
+    )
+    send_response = await client.send_text_message(
         touser=latest_candidate["external_userid"],
         open_kfid=open_kfid,
         content=content,
+    )
+    send_msgid = str(send_response.get("msgid") or "")
+    logger.info("WeCom send response: open_kfid=%s reply_to_msgid=%s response=%s", open_kfid, msgid, send_response)
+    _remember_send_attempt(
+        send_msgid or None,
+        {
+            "open_kfid": open_kfid,
+            "reply_to_msgid": msgid,
+            "touser": latest_candidate["external_userid"],
+            "content": content,
+            "response_msgid": send_msgid or None,
+        },
     )
     wecom_runtime.last_reply_sent_at[open_kfid] = now
     logger.info("WeCom echo reply sent: open_kfid=%s msgid=%s content=%r", open_kfid, msgid, content)
