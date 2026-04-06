@@ -131,29 +131,7 @@ async def test_wecom_callback_post_decrypts_event_and_returns_success(monkeypatc
     assert response.text == "success"
 
 
-async def test_wecom_callback_post_syncs_text_and_replies_with_same_content(monkeypatch):
-    token = "drizJYNAB2MUvAg"
-    aes_key = "SDyAgekIfeqWB1tdrFtNH3C1cxhdkbvUslMIguQ31pn"
-    timestamp = "1712300000"
-    nonce = "nonce-123"
-    plaintext = (
-        "<xml>"
-        "<ToUserName><![CDATA[wwcorp]]></ToUserName>"
-        "<CreateTime>1712300000</CreateTime>"
-        "<MsgType><![CDATA[event]]></MsgType>"
-        "<Event><![CDATA[kf_msg_or_event]]></Event>"
-        "<Token><![CDATA[sync-token-1]]></Token>"
-        "<OpenKfId><![CDATA[kfid_test]]></OpenKfId>"
-        "</xml>"
-    )
-    encrypted = _encrypt_message(aes_key=aes_key, plaintext=plaintext)
-    signature = _signature(token=token, timestamp=timestamp, nonce=nonce, encrypted=encrypted)
-
-    monkeypatch.setattr("config.settings.wecom_kf_token", token)
-    monkeypatch.setattr("config.settings.wecom_kf_encoding_aes_key", aes_key)
-    monkeypatch.setattr("config.settings.wecom_corp_id", "wwcorp")
-    monkeypatch.setattr("config.settings.wecom_kf_secret", "kf-secret")
-
+async def test_wecom_process_sync_batch_syncs_text_and_replies_with_same_content(monkeypatch):
     calls: list[tuple[str, ...]] = []
 
     class FakeWeComClient:
@@ -177,8 +155,55 @@ async def test_wecom_callback_post_syncs_text_and_replies_with_same_content(monk
             calls.append(("send", touser, open_kfid, content))
             return {"errcode": 0, "errmsg": "ok"}
 
-    monkeypatch.setattr("api.wecom.get_wecom_client", lambda: FakeWeComClient())
-    monkeypatch.setattr("api.wecom.wecom_runtime", SimpleNamespace(cursors={}, processed_message_ids=set()))
+    monkeypatch.setattr(
+        "api.wecom.wecom_runtime",
+        SimpleNamespace(
+            cursors={},
+            processed_message_ids=set(),
+            reply_locks={},
+            last_reply_sent_at={},
+            active_tasks=set(),
+        ),
+    )
+    monkeypatch.setattr("api.wecom._now", lambda: 100.0)
+
+    from api.wecom import _process_sync_batch
+
+    await _process_sync_batch(client=FakeWeComClient(), sync_token="sync-token-1", open_kfid="kfid_test")
+
+    assert calls == [
+        ("sync", "sync-token-1", "kfid_test", ""),
+        ("send", "external-user-1", "kfid_test", "1"),
+    ]
+
+
+async def test_wecom_callback_post_schedules_background_processing_and_returns_immediately(monkeypatch):
+    token = "drizJYNAB2MUvAg"
+    aes_key = "SDyAgekIfeqWB1tdrFtNH3C1cxhdkbvUslMIguQ31pn"
+    timestamp = "1712300000"
+    nonce = "nonce-123"
+    plaintext = (
+        "<xml>"
+        "<ToUserName><![CDATA[wwcorp]]></ToUserName>"
+        "<CreateTime>1712300000</CreateTime>"
+        "<MsgType><![CDATA[event]]></MsgType>"
+        "<Event><![CDATA[kf_msg_or_event]]></Event>"
+        "<Token><![CDATA[sync-token-1]]></Token>"
+        "<OpenKfId><![CDATA[kfid_test]]></OpenKfId>"
+        "</xml>"
+    )
+    encrypted = _encrypt_message(aes_key=aes_key, plaintext=plaintext)
+    signature = _signature(token=token, timestamp=timestamp, nonce=nonce, encrypted=encrypted)
+
+    monkeypatch.setattr("config.settings.wecom_kf_token", token)
+    monkeypatch.setattr("config.settings.wecom_kf_encoding_aes_key", aes_key)
+
+    scheduled: list[tuple[str, str]] = []
+
+    def fake_schedule(*, sync_token: str, open_kfid: str):
+        scheduled.append((sync_token, open_kfid))
+
+    monkeypatch.setattr("api.wecom._schedule_customer_service_sync", fake_schedule)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -195,7 +220,107 @@ async def test_wecom_callback_post_syncs_text_and_replies_with_same_content(monk
 
     assert response.status_code == 200
     assert response.text == "success"
+    assert scheduled == [("sync-token-1", "kfid_test")]
+
+
+async def test_wecom_process_sync_batch_replies_only_latest_user_text(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    class FakeWeComClient:
+        async def sync_messages(self, *, sync_token: str, open_kfid: str, cursor: str | None = None):
+            calls.append(("sync", sync_token, open_kfid, cursor or ""))
+            return {
+                "next_cursor": "cursor-2",
+                "has_more": 0,
+                "msg_list": [
+                    {
+                        "msgid": "msg-old",
+                        "msgtype": "text",
+                        "origin": 3,
+                        "external_userid": "external-user-1",
+                        "text": {"content": "old"},
+                    },
+                    {
+                        "msgid": "msg-agent",
+                        "msgtype": "text",
+                        "origin": 4,
+                        "external_userid": "external-user-1",
+                        "text": {"content": "agent"},
+                    },
+                    {
+                        "msgid": "msg-new",
+                        "msgtype": "text",
+                        "origin": 3,
+                        "external_userid": "external-user-1",
+                        "text": {"content": "new"},
+                    },
+                ],
+            }
+
+        async def send_text_message(self, *, touser: str, open_kfid: str, content: str):
+            calls.append(("send", touser, open_kfid, content))
+            return {"errcode": 0, "errmsg": "ok"}
+
+    monkeypatch.setattr(
+        "api.wecom.wecom_runtime",
+        SimpleNamespace(
+            cursors={},
+            processed_message_ids=set(),
+            reply_locks={},
+            last_reply_sent_at={},
+            active_tasks=set(),
+        ),
+    )
+    monkeypatch.setattr("api.wecom._now", lambda: 100.0)
+
+    from api.wecom import _process_sync_batch
+
+    await _process_sync_batch(client=FakeWeComClient(), sync_token="sync-token-1", open_kfid="kfid_test")
+
     assert calls == [
         ("sync", "sync-token-1", "kfid_test", ""),
-        ("send", "external-user-1", "kfid_test", "1"),
+        ("send", "external-user-1", "kfid_test", "new"),
     ]
+
+
+async def test_wecom_process_sync_batch_skips_send_when_rate_limited(monkeypatch):
+    calls: list[tuple[str, ...]] = []
+
+    class FakeWeComClient:
+        async def sync_messages(self, *, sync_token: str, open_kfid: str, cursor: str | None = None):
+            calls.append(("sync", sync_token, open_kfid, cursor or ""))
+            return {
+                "next_cursor": "cursor-2",
+                "has_more": 0,
+                "msg_list": [
+                    {
+                        "msgid": "msg-new",
+                        "msgtype": "text",
+                        "origin": 3,
+                        "external_userid": "external-user-1",
+                        "text": {"content": "new"},
+                    }
+                ],
+            }
+
+        async def send_text_message(self, *, touser: str, open_kfid: str, content: str):
+            calls.append(("send", touser, open_kfid, content))
+            return {"errcode": 0, "errmsg": "ok"}
+
+    monkeypatch.setattr(
+        "api.wecom.wecom_runtime",
+        SimpleNamespace(
+            cursors={},
+            processed_message_ids=set(),
+            reply_locks={},
+            last_reply_sent_at={"kfid_test": 100.0},
+            active_tasks=set(),
+        ),
+    )
+    monkeypatch.setattr("api.wecom._now", lambda: 101.0)
+
+    from api.wecom import _process_sync_batch
+
+    await _process_sync_batch(client=FakeWeComClient(), sync_token="sync-token-1", open_kfid="kfid_test")
+
+    assert calls == [("sync", "sync-token-1", "kfid_test", "")]
