@@ -20,6 +20,11 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("JWT_SECRET", "SECRET_KEY"),
     )
     jwt_expire_hours: int = 24
+    wecom_kf_token: str = ""
+    wecom_kf_encoding_aes_key: str = ""
+    wecom_kf_receive_id: str = ""
+    wecom_kf_secret: str = ""
+    wecom_corp_id: str = ""
 
     model_config = SettingsConfigDict(env_file=".env")
 
