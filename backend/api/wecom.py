@@ -47,7 +47,8 @@ async def receive_wecom_callback(
     nonce: str = Query(...),
 ):
     token, aes_key = _require_wecom_callback_config()
-    encrypted = extract_encrypted_message(await request.body())
+    raw_body = await request.body()
+    encrypted = extract_encrypted_message(raw_body)
     _verify_request_signature(
         token=token,
         timestamp=timestamp,
@@ -56,7 +57,16 @@ async def receive_wecom_callback(
         signature=msg_signature,
     )
 
-    event_xml = decrypt_message(aes_key, encrypted)
+    try:
+        event_xml = decrypt_message(aes_key, encrypted)
+    except Exception:
+        logger.exception(
+            "Failed to decrypt WeCom callback: body=%s encrypted_len=%s encrypted_prefix=%s",
+            raw_body.decode("utf-8", errors="replace"),
+            len(encrypted),
+            encrypted[:48],
+        )
+        raise
     try:
         event = ElementTree.fromstring(event_xml)
     except ElementTree.ParseError as exc:
