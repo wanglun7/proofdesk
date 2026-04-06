@@ -3,7 +3,6 @@ import hashlib
 import struct
 from xml.etree import ElementTree
 
-from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi import HTTPException
 
@@ -20,13 +19,27 @@ def decrypt_message(aes_key: str, encrypted: str) -> str:
     cipher = Cipher(algorithms.AES(key), modes.CBC(key[:16]))
     decryptor = cipher.decryptor()
     padded = decryptor.update(ciphertext) + decryptor.finalize()
-
-    unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
-    payload = unpadder.update(padded) + unpadder.finalize()
+    payload = _unpad_wecom_payload(padded)
 
     msg_len = struct.unpack(">I", payload[16:20])[0]
     message = payload[20 : 20 + msg_len]
     return message.decode("utf-8")
+
+
+def _unpad_wecom_payload(padded: bytes) -> bytes:
+    # WeCom/WeChat callback crypto uses PKCS#7 with a 32-byte block size.
+    # Some test fixtures may still use a 16-byte block size, so accept both.
+    if not padded:
+        raise ValueError("Empty decrypted payload")
+
+    pad_len = padded[-1]
+    if pad_len < 1 or pad_len > 32:
+        raise ValueError("Invalid padding bytes")
+
+    suffix = padded[-pad_len:]
+    if suffix != bytes([pad_len]) * pad_len:
+        raise ValueError("Invalid padding bytes")
+    return padded[:-pad_len]
 
 
 def extract_encrypted_message(xml_body: bytes) -> str:

@@ -3,7 +3,6 @@ import hashlib
 import os
 import struct
 
-from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from httpx import ASGITransport, AsyncClient
 
@@ -18,8 +17,9 @@ def _encrypt_message(*, aes_key: str, plaintext: str, receive_id: str = "proofde
         "utf-8"
     )
 
-    padder = padding.PKCS7(algorithms.AES.block_size).padder()
-    padded = padder.update(payload) + padder.finalize()
+    block_size = 32
+    pad_len = block_size - (len(payload) % block_size)
+    padded = payload + bytes([pad_len]) * pad_len
 
     cipher = Cipher(algorithms.AES(key), modes.CBC(key[:16]))
     encryptor = cipher.encryptor()
